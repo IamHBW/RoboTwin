@@ -3,12 +3,12 @@ beat_block_hammer: 400
 blocks_ranking_rgb: 1200
 blocks_ranking_size: 1200
 click_alarmclock: 400
-click_bell: 400
+click_bell: 200
 dump_bin_bigbin: 600
-grab_roller: 400
+grab_roller: 200
 handover_block: 800
 handover_mic: 600
-lift_pot: 400
+lift_pot: 200
 move_can_pot: 400
 move_playingcard_away: 400
 move_stapler_pad: 400

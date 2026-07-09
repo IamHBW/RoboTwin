@@ -1,0 +1,41 @@
+# Basic experiment configuration used by RoboTwin script/eval_policy.py.
+policy_name: wam_policy
+task_name: null
+task_config: null
+ckpt_setting: null
+seed: 0
+instruction_type: unseen
+
+# WAM policy configuration. Values like ${WAM_CHECKPOINT} are resolved by
+# deploy_policy.py at runtime, so checkpoints can stay empty until training ends.
+model_type: ${WAM_MODEL_TYPE}
+backend: ${WAM_BACKEND}
+rgbdwam_root: ${RGBDWAM_ROOT}
+wam_checkpoint: ${WAM_CHECKPOINT}
+v2w_checkpoint: ${WAM_V2W_CHECKPOINT}
+vae_checkpoint: ${WAM_VAE_CHECKPOINT}
+
+# local backend: import this module and call its model factory.
+inference_module: ${WAM_INFERENCE_MODULE}
+inference_factory: ${WAM_INFERENCE_FACTORY}
+
+# http backend: POST a pickle payload to this URL and read a pickle response.
+server_url: ${WAM_SERVER_URL}
+server_timeout_s: 600
+
+# Observation/action settings matched to robotwin_wam_{rgb,depth}_ee20.yaml.
+camera: front_camera
+view_layout: ${WAM_VIEW_LAYOUT}
+view_cameras: ${WAM_VIEW_CAMERAS}
+image_size: [240, 320]
+obs_video_horizon: 5
+action_horizon: 16
+action_per_frame: 4
+video_frame_stride: 1
+actions_per_eval: 4
+depth_unit_scale: 0.001
+depth_min_m: 0.05
+depth_max_m: 1.2
+normalize_depth: true
+clip_gripper: true
+learn_row: ${WAM_LEARN_ROW}
