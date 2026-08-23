@@ -89,10 +89,17 @@ def _update_results_summary(summary_path, records):
     os.replace(tmp_path, summary_path)
 
 
-def record_rgbdwam_eval_result(usr_args, args, task_env, episode_seed, success, video_path):
+def record_rgbdwam_eval_result(usr_args, args, task_env, model, episode_seed, success, video_path):
     detail_file = os.environ.get("RGBDWAM_RESULTS_DETAILED_JSONL", "")
     if not detail_file:
         return
+
+    instruction = getattr(model, "last_instruction", None)
+    model_prompt = getattr(model, "last_model_prompt", None)
+    if not isinstance(instruction, str) or not instruction.strip():
+        raise RuntimeError("Policy did not record a non-empty episode instruction.")
+    if not isinstance(model_prompt, str) or not model_prompt.strip():
+        raise RuntimeError("Policy did not record a non-empty episode model prompt.")
 
     detail_path = Path(detail_file)
     summary_file = os.environ.get("RGBDWAM_RESULTS_SUMMARY_JSON", "")
@@ -110,6 +117,8 @@ def record_rgbdwam_eval_result(usr_args, args, task_env, episode_seed, success, 
         "task": str(args.get("task_name", "")),
         "task_config": str(args.get("task_config", "")),
         "ckpt_setting": str(args.get("ckpt_setting", "")),
+        "instruction": instruction,
+        "model_prompt": model_prompt,
         "episode_index": int(max(0, getattr(task_env, "test_num", 1) - 1)),
         "seed": int(episode_seed),
         "success": bool(success),
@@ -452,7 +461,7 @@ def eval_policy(task_name,
         video_path = None
         if TASK_ENV.eval_video_path is not None:
             video_path = Path(TASK_ENV.eval_video_path) / f"episode{TASK_ENV.test_num - 1}.mp4"
-        record_rgbdwam_eval_result(usr_args, args, TASK_ENV, now_seed, succ, video_path)
+        record_rgbdwam_eval_result(usr_args, args, TASK_ENV, model, now_seed, succ, video_path)
 
         print(
             f"\033[93m{task_name}\033[0m | \033[94m{args['policy_name']}\033[0m | \033[92m{args['task_config']}\033[0m | \033[91m{args['ckpt_setting']}\033[0m\n"
