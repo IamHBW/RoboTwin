@@ -136,6 +136,9 @@ class ModelClient:
         self.port = port
         self.timeout = timeout
         self.sock = None
+        self.last_rpc_metrics = {}
+        self.decode_errors = 0
+        self.connection_resets = 0
         self._connect()
 
     def _connect(self):
@@ -165,19 +168,50 @@ class ModelClient:
 
     def _send_recv(self, data):
         """Send request and receive response with numpy array support"""
+        encode_started = time.perf_counter()
+        json_data = numpy_to_json(data).encode('utf-8')
+        encode_s = time.perf_counter() - encode_started
+        round_trip_started = time.perf_counter()
         try:
-            # Serialize with numpy support
-            json_data = numpy_to_json(data).encode('utf-8')
-            
             # Send data length and data
             self.sock.sendall(len(json_data).to_bytes(4, 'big'))
             self.sock.sendall(json_data)
-            
+
             # Receive and deserialize response
             response = self._recv_response()
+            self.last_rpc_metrics = {
+                "request_wire_bytes": len(json_data),
+                "response_wire_bytes": self._last_response_wire_bytes,
+                "encode_s": encode_s,
+                "socket_round_trip_s": time.perf_counter() - round_trip_started,
+                "decode_errors": self.decode_errors,
+                "connection_resets": self.connection_resets,
+            }
             return response
-            
+
         except Exception as e:
+            if isinstance(e, (ConnectionError, ConnectionResetError, BrokenPipeError, OSError)):
+                self.connection_resets += 1
+            self.last_rpc_metrics = {
+                "request_wire_bytes": len(json_data),
+                "response_wire_bytes": getattr(self, "_last_response_wire_bytes", 0),
+                "encode_s": encode_s,
+                "socket_round_trip_s": time.perf_counter() - round_trip_started,
+                "decode_errors": self.decode_errors,
+                "connection_resets": self.connection_resets,
+            }
+            print(
+                "[RPC_TRANSPORT_ERROR] "
+                + json.dumps(
+                    {
+                        **self.last_rpc_metrics,
+                        "endpoint": f"{self.host}:{self.port}",
+                        "error": str(e),
+                    },
+                    sort_keys=True,
+                ),
+                flush=True,
+            )
             self.close()
             raise ConnectionError(f"Communication error: {str(e)}")
 
@@ -189,6 +223,7 @@ class ModelClient:
             raise ConnectionError("Connection closed by server")
         
         size = int.from_bytes(len_data, 'big')
+        self._last_response_wire_bytes = size
         
         # Read complete response
         chunks = []
@@ -201,7 +236,11 @@ class ModelClient:
             received += len(chunk)
         
         # Deserialize with numpy reconstruction
-        return json_to_numpy(b''.join(chunks).decode('utf-8'))
+        try:
+            return json_to_numpy(b''.join(chunks).decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+            self.decode_errors += 1
+            raise
 
     def call(self, func_name=None, obs=None):
         response = self._send_recv({"cmd": func_name, "obs": obs})

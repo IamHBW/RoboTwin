@@ -18,6 +18,11 @@ import numpy as np
 from PIL import Image
 
 
+MODEL_PROMPT_TEMPLATE = (
+    "A video recorded from a robot's point of view executing the following instruction: {task}"
+)
+
+
 def _resolve_env(value: Any, default: Any = "") -> Any:
     if value is None:
         return default
@@ -488,6 +493,7 @@ class WAMPolicy:
         self.obs_cache: deque[dict[str, Any]] = deque(maxlen=max(self.config.obs_video_horizon, video_cache_len))
         self.action_cache: deque[dict[str, Any]] = deque()
         self.last_instruction = ""
+        self.last_model_prompt = ""
         self.current_episode_index = -1
         trace_dir = self.config.trace_dir or str(Path(str(usr_args.get("eval_save_dir", "."))) / "wam_trace")
         self.trace_dir = Path(trace_dir).expanduser() if self.config.trace_enabled else None
@@ -501,6 +507,7 @@ class WAMPolicy:
         self.obs_cache.clear()
         self.action_cache.clear()
         self.last_instruction = ""
+        self.last_model_prompt = ""
         self.current_episode_index = -1
         self.chunk_index = 0
         self.last_action_record = None
@@ -509,6 +516,7 @@ class WAMPolicy:
         obs = self.encode_obs(task_env, observation)
         self.obs_cache.append(obs)
         self.last_instruction = str(getattr(task_env, "get_instruction")())
+        self.last_model_prompt = MODEL_PROMPT_TEMPLATE.format(task=self.last_instruction)
         self.current_episode_index = int(getattr(task_env, "test_num", -1))
 
     def encode_obs(self, task_env: Any, observation: dict[str, Any]) -> dict[str, Any]:
@@ -618,6 +626,7 @@ class WAMPolicy:
         return {
             "model_type": self.config.model_type,
             "instruction": self.last_instruction,
+            "model_prompt": self.last_model_prompt,
             "camera": self.config.camera,
             "view_layout": self.config.view_layout,
             "view_cameras": self.config.view_cameras,

@@ -17,8 +17,6 @@ from collections import deque
 sys.path.append("./")
 sys.path.append(f"./policy")
 sys.path.append("./description/utils")
-from envs._GLOBAL_CONFIGS import CONFIGS_PATH
-
 import numpy as np
 from typing import Any
 import base64
@@ -68,6 +66,25 @@ def json_to_numpy(json_str: str) -> Any:
             return np.frombuffer(raw, dtype=dct['dtype']).reshape(dct['shape'])
         return dct
     return json.loads(json_str, object_hook=object_hook)
+
+
+def numpy_schema(data: Any, path: str = "") -> list[dict[str, Any]]:
+    """Describe decoded arrays without changing the request payload."""
+    if isinstance(data, np.ndarray):
+        return [{"path": path, "dtype": str(data.dtype), "shape": list(data.shape)}]
+    if isinstance(data, dict):
+        return [
+            item
+            for key, value in data.items()
+            for item in numpy_schema(value, f"{path}.{key}" if path else str(key))
+        ]
+    if isinstance(data, (list, tuple)):
+        return [
+            item
+            for index, value in enumerate(data)
+            for item in numpy_schema(value, f"{path}[{index}]")
+        ]
+    return []
 
 
 # --------------------- Model Server Implementation ---------------------
@@ -126,6 +143,7 @@ class ModelServer:
 
     def _handle_client(self, client_socket):
         """Process requests from a single client"""
+        logged_schema = False
         with client_socket:
             while self.running:
                 try:
@@ -149,6 +167,16 @@ class ModelServer:
 
                     # Deserialize JSON to Python, reconstruct any numpy arrays
                     data = json_to_numpy(raw_msg)
+                    schema = numpy_schema(data)
+                    if schema and not logged_schema:
+                        print(
+                            "[RPC_REQUEST_SCHEMA] "
+                            + json.dumps(
+                                {"cmd": data.get("cmd"), "arrays": schema}, sort_keys=True
+                            ),
+                            flush=True,
+                        )
+                        logged_schema = True
 
                     # Extract command and observation
                     cmd = data.get("cmd")
@@ -219,6 +247,7 @@ def main(usr_args):
     """Main entry: load model, start server, run indefinitely"""
     # Extract basic arguments
     policy_name = usr_args['policy_name']
+    host = usr_args.get('host', 'localhost')
     port = usr_args.get('port')
 
     # Instantiate model
@@ -226,7 +255,7 @@ def main(usr_args):
     model = get_model(usr_args)
 
     # Start server in background thread
-    server = ModelServer(model, port=port)
+    server = ModelServer(model, host=host, port=port)
     thread = threading.Thread(target=server.start, daemon=True)
     thread.start()
 
@@ -243,6 +272,7 @@ def main(usr_args):
 def parse_args_and_config():
     """Parse CLI args and YAML config, merge overrides"""
     parser = argparse.ArgumentParser()
+    parser.add_argument('--host', default='localhost', help='Address for ModelServer to bind')
     parser.add_argument('--port', type=int, help='Port for ModelServer (optional)')
     parser.add_argument('--config', type=str, required=True, help='Path to config YAML')
     parser.add_argument('--overrides', nargs=argparse.REMAINDER,
@@ -252,6 +282,7 @@ def parse_args_and_config():
     # Load base config
     with open(args.config, 'r', encoding='utf-8') as f:
         cfg = yaml.safe_load(f)
+    cfg['host'] = args.host
     cfg['port'] = args.port
 
     # Parse overrides: --key value pairs

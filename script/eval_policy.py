@@ -28,19 +28,10 @@ parent_directory = os.path.dirname(current_file_path)
 
 
 def _read_jsonl(path):
-    records = []
     if not path.exists():
-        return records
+        return []
     with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-    return records
+        return [json.loads(line) for line in handle if line.strip()]
 
 
 def _update_results_summary(summary_path, records):
@@ -51,7 +42,12 @@ def _update_results_summary(summary_path, records):
             ("overall", "all", "all", "all"),
             (record.get("modality", ""), "all", "all", "all"),
             (record.get("modality", ""), layer, "all", "all"),
-            (record.get("modality", ""), layer, record.get("task", ""), record.get("task_config", "")),
+            (
+                record.get("modality", ""),
+                layer,
+                record.get("task", ""),
+                record.get("task_config", ""),
+            ),
         ]
         for key in keys:
             bucket = groups.setdefault(
@@ -70,10 +66,12 @@ def _update_results_summary(summary_path, records):
             bucket["successes"] += int(bool(record.get("success", False)))
 
     for bucket in groups.values():
-        episodes = bucket["episodes"]
-        bucket["success_rate"] = bucket["successes"] / episodes if episodes else 0.0
+        bucket["success_rate"] = bucket["successes"] / bucket["episodes"]
 
-    overall = groups.get("overall|all|all|all", {"episodes": 0, "successes": 0, "success_rate": 0.0})
+    overall = groups.get(
+        "overall|all|all|all",
+        {"episodes": 0, "successes": 0, "success_rate": 0.0},
+    )
     payload = {
         "updated_at": datetime.now().isoformat(timespec="seconds"),
         "episodes": overall["episodes"],
@@ -81,15 +79,31 @@ def _update_results_summary(summary_path, records):
         "success_rate": overall["success_rate"],
         "groups": sorted(
             groups.values(),
-            key=lambda item: (item["modality"], str(item["w2a_layer_idx"]), item["task"], item["task_config"]),
+            key=lambda item: (
+                item["modality"],
+                str(item["w2a_layer_idx"]),
+                item["task"],
+                item["task_config"],
+            ),
         ),
     }
     tmp_path = summary_path.with_suffix(summary_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     os.replace(tmp_path, summary_path)
 
 
-def record_rgbdwam_eval_result(usr_args, args, task_env, model, episode_seed, success, video_path):
+def record_rgbdwam_eval_result(
+    usr_args,
+    args,
+    task_env,
+    model,
+    episode_seed,
+    success,
+    video_path,
+):
     detail_file = os.environ.get("RGBDWAM_RESULTS_DETAILED_JSONL", "")
     if not detail_file:
         return
@@ -103,52 +117,77 @@ def record_rgbdwam_eval_result(usr_args, args, task_env, model, episode_seed, su
 
     detail_path = Path(detail_file)
     summary_file = os.environ.get("RGBDWAM_RESULTS_SUMMARY_JSON", "")
-    summary_path = Path(summary_file) if summary_file else detail_path.with_name("results_summary.json")
-    lock_path = Path(os.environ.get("RGBDWAM_RESULTS_LOCK", str(detail_path) + ".lock"))
+    summary_path = (
+        Path(summary_file)
+        if summary_file
+        else detail_path.with_name("results_summary.json")
+    )
+    lock_path = Path(
+        os.environ.get("RGBDWAM_RESULTS_LOCK", str(detail_path) + ".lock")
+    )
     detail_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    w2a_layer_idx = str(usr_args.get("w2a_layer_idx", os.environ.get("WAM_W2A_LAYER_IDX", "")))
+    checkpoint_path = str(
+        usr_args.get("checkpoint_path")
+        or usr_args.get("remote_expected_checkpoint")
+        or ""
+    )
+    result_suffix = _result_suffix_from_task_config(str(args.get("task_config", "")))
     record = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "run_id": os.environ.get("ROBOTWIN_RUN_ID", ""),
+        "contract_id": os.environ.get("ROBOTWIN_CONTRACT_ID", ""),
+        "model": str(usr_args.get("policy_name", args.get("policy_name", ""))),
         "modality": str(usr_args.get("model_type", "")),
-        "w2a_layer_idx": w2a_layer_idx,
+        "w2a_layer_idx": str(
+            usr_args.get("w2a_layer_idx", os.environ.get("WAM_W2A_LAYER_IDX", ""))
+        ),
         "task": str(args.get("task_name", "")),
+        "phase": "clean" if result_suffix == "clean" else "randomized",
         "task_config": str(args.get("task_config", "")),
         "ckpt_setting": str(args.get("ckpt_setting", "")),
+        "checkpoint": checkpoint_path,
+        "checkpoint_path": checkpoint_path,
+        "instruction_type": str(usr_args.get("instruction_type", "")),
         "instruction": instruction,
         "model_prompt": model_prompt,
         "episode_index": int(max(0, getattr(task_env, "test_num", 1) - 1)),
+        "candidate_seed": int(episode_seed),
+        "accepted_seed": int(episode_seed),
         "seed": int(episode_seed),
         "success": bool(success),
         "success_int": int(bool(success)),
         "successes_so_far": int(getattr(task_env, "suc", 0)),
         "episodes_so_far": int(getattr(task_env, "test_num", 0)),
-        "success_rate_so_far": float(getattr(task_env, "suc", 0) / max(1, getattr(task_env, "test_num", 0))),
-        "video_path": str(video_path) if video_path else "",
+        "success_rate_so_far": float(
+            getattr(task_env, "suc", 0) / max(1, getattr(task_env, "test_num", 0))
+        ),
+        "policy_action_steps": int(getattr(task_env, "take_action_cnt", 0)),
+        "video_frame_count": int(getattr(task_env, "_eval_video_frame_count", 0)),
+        "video_physics_steps": int(getattr(task_env, "_eval_video_inner_step", 0)),
+        "video_inner_freq": int(args.get("eval_video_inner_freq", 0)),
+        "video_fps": int(args.get("eval_video_fps", 0)),
+        "video_sampling": (
+            "action_endpoint"
+            if int(args.get("eval_video_inner_freq", 0)) == 0
+            else "physics_cadence"
+        ),
+        "video_path": str(Path(video_path).resolve()) if video_path else "",
+        "worker": os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+        "error": None,
         "eval_save_dir": str(usr_args.get("eval_save_dir", "")),
-        "wam_checkpoint": str(usr_args.get("wam_checkpoint", "")),
-        "v2w_checkpoint": str(usr_args.get("v2w_checkpoint", "")),
-        "vae_checkpoint": str(usr_args.get("vae_checkpoint", "")),
-        "server_url": str(usr_args.get("server_url", "")),
-        "actions_per_eval": usr_args.get("actions_per_eval", ""),
-        "action_per_frame": usr_args.get("action_per_frame", ""),
-        "video_frame_stride": usr_args.get("video_frame_stride", ""),
-        "learn_row": usr_args.get("learn_row", ""),
     }
 
-    try:
-        with lock_path.open("w", encoding="utf-8") as lock_handle:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-            with detail_path.open("a", encoding="utf-8") as detail_handle:
-                detail_handle.write(json.dumps(record, sort_keys=True) + "\n")
-                detail_handle.flush()
-                os.fsync(detail_handle.fileno())
-            _update_results_summary(summary_path, _read_jsonl(detail_path))
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-    except Exception as exc:
-        print(f"[rgbdwam-results] failed to record eval result: {exc}")
+    with lock_path.open("w", encoding="utf-8") as lock_handle:
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        with detail_path.open("a", encoding="utf-8") as detail_handle:
+            detail_handle.write(json.dumps(record, sort_keys=True) + "\n")
+            detail_handle.flush()
+            os.fsync(detail_handle.fileno())
+        _update_results_summary(summary_path, _read_jsonl(detail_path))
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def class_decorator(task_name):
@@ -187,14 +226,61 @@ def get_embodiment_config(robot_file):
     return embodiment_args
 
 
+def get_eval_video_size(args):
+    if args["camera"].get("collect_wrist_camera", False):
+        return "320x384"
+
+    head_camera_cfg = get_camera_config(args["camera"]["head_camera_type"])
+    video_w = int(head_camera_cfg["w"])
+    video_h = int(head_camera_cfg["h"])
+
+    return f"{video_w}x{video_h}"
+
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y"}:
+            return True
+        if lowered in {"0", "false", "no", "n"}:
+            return False
+    return bool(value)
+
+
+def _result_suffix_from_task_config(task_config):
+    if task_config in {
+        "demo_clean",
+        "demo_clean_fastwam_depth_eval",
+        "demo_clean_fastwam_rgb_eval",
+    }:
+        return "clean"
+    if task_config in {
+        "demo_randomized",
+        "demo_randomized_fastwam_depth_eval",
+        "demo_randomized_fastwam_rgb_eval",
+    }:
+        return "random"
+    raise ValueError(
+        f"Unsupported `task_config` for fixed result naming: {task_config}. "
+        "Expected a canonical clean/randomized config or its FastWAM RGB/depth eval variant."
+    )
+
+
 def main(usr_args):
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    eval_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     task_name = usr_args["task_name"]
     task_config = usr_args["task_config"]
     ckpt_setting = usr_args["ckpt_setting"]
     # checkpoint_num = usr_args['checkpoint_num']
     policy_name = usr_args["policy_name"]
     instruction_type = usr_args["instruction_type"]
+    skip_get_obs_within_replan = parse_bool(usr_args.get("skip_get_obs_within_replan", False))
+    eval_num_episodes = int(usr_args.get("eval_num_episodes", 100))
+    if eval_num_episodes <= 0:
+        raise ValueError(f"`eval_num_episodes` must be > 0, got: {eval_num_episodes}")
+    eval_output_dir = usr_args.get("eval_output_dir")
     save_dir = None
     video_save_dir = None
     video_size = None
@@ -203,6 +289,17 @@ def main(usr_args):
 
     with open(f"./task_config/{task_config}.yml", "r", encoding="utf-8") as f:
         args = yaml.load(f.read(), Loader=yaml.FullLoader)
+
+    if "data_type" in usr_args and isinstance(usr_args["data_type"], dict):
+        merged_data_type = dict(args.get("data_type", {}))
+        merged_data_type.update(usr_args["data_type"])
+        args["data_type"] = merged_data_type
+    if "eval_video_log" in usr_args:
+        args["eval_video_log"] = parse_bool(usr_args["eval_video_log"])
+    if "eval_video_inner_freq" in usr_args:
+        args["eval_video_inner_freq"] = int(usr_args["eval_video_inner_freq"])
+    if "eval_video_fps" in usr_args:
+        args["eval_video_fps"] = int(usr_args["eval_video_fps"])
 
     args['task_name'] = task_name
     args["task_config"] = task_config
@@ -247,14 +344,16 @@ def main(usr_args):
     else:
         embodiment_name = str(embodiment_type[0]) + "+" + str(embodiment_type[1])
 
-    save_dir = Path(f"eval_result/{task_name}/{policy_name}/{task_config}/{ckpt_setting}/{current_time}")
+    if eval_output_dir is not None and str(eval_output_dir).strip() != "":
+        save_dir = Path(str(eval_output_dir))
+    else:
+        save_dir = Path(f"eval_result/{task_name}/{policy_name}/{task_config}/{ckpt_setting}/{eval_ts}")
     save_dir.mkdir(parents=True, exist_ok=True)
     usr_args["eval_save_dir"] = str(save_dir)
 
     if args["eval_video_log"]:
         video_save_dir = save_dir
-        camera_config = get_camera_config(args["camera"]["head_camera_type"])
-        video_size = str(camera_config["w"]) + "x" + str(camera_config["h"])
+        video_size = get_eval_video_size(args)
         video_save_dir.mkdir(parents=True, exist_ok=True)
         args["eval_video_save_dir"] = video_save_dir
 
@@ -286,9 +385,7 @@ def main(usr_args):
 
     st_seed = 100000 * (1 + seed)
     suc_nums = []
-    test_num = int(usr_args.get("eval_num_episodes", 100))
-    if test_num <= 0:
-        raise ValueError(f"eval_num_episodes must be positive, got {test_num}")
+    test_num = eval_num_episodes
     eval_start_episode = int(usr_args.get("eval_start_episode", 0))
     eval_start_seed_offset = int(usr_args.get("eval_start_seed_offset", eval_start_episode))
     if eval_start_episode < 0 or eval_start_seed_offset < 0:
@@ -309,14 +406,16 @@ def main(usr_args):
                                    start_episode=eval_start_episode,
                                    start_seed_offset=eval_start_seed_offset,
                                    video_size=video_size,
-                                   instruction_type=instruction_type)
+                                   instruction_type=instruction_type,
+                                   skip_get_obs_within_replan=skip_get_obs_within_replan)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
 
-    file_path = os.path.join(save_dir, f"_result.txt")
+    result_suffix = _result_suffix_from_task_config(task_config)
+    file_path = os.path.join(save_dir, f"_result_{result_suffix}.txt")
     with open(file_path, "w") as file:
-        file.write(f"Timestamp: {current_time}\n\n")
+        file.write(f"Timestamp: {eval_ts}\n\n")
         file.write(f"Instruction Type: {instruction_type}\n\n")
         # file.write(str(task_reward) + '\n')
         file.write("\n".join(map(str, np.array(suc_nums) / test_num)))
@@ -335,7 +434,8 @@ def eval_policy(task_name,
                 start_episode=0,
                 start_seed_offset=0,
                 video_size=None,
-                instruction_type=None):
+                instruction_type=None,
+                skip_get_obs_within_replan=False):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
     usr_args = usr_args or {}
@@ -376,15 +476,13 @@ def eval_policy(task_name,
                 args["render_freq"] = render_freq
                 continue
             except Exception as e:
-                # stack_trace = traceback.format_exc()
-                # print(" -------------")
-                # print("Error: ", e)
-                # print(" -------------")
+                print(" -------------")
+                print("Error: ", e)
+                print("Stack Trace: ", traceback.format_exc())
+                print(" -------------")
                 TASK_ENV.close_env()
                 now_seed += 1
                 args["render_freq"] = render_freq
-                if os.environ.get("ROBOTWIN_DEBUG_EXCEPTIONS", "0") == "1":
-                    traceback.print_exc()
                 print("error occurs !")
                 continue
 
@@ -398,13 +496,39 @@ def eval_policy(task_name,
 
         args["render_freq"] = render_freq
 
-        TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+        try:
+            TASK_ENV.setup_demo(now_ep_num=now_id, seed=now_seed, is_test=True, **args)
+        except UnStableError as e:
+            # This seed passed expert_check but failed during rollout env init.
+            # Roll back the accepted-seed counter and skip to next seed.
+            succ_seed -= 1
+            if len(suc_test_seed_list) > 0 and suc_test_seed_list[-1] == now_seed:
+                suc_test_seed_list.pop()
+            TASK_ENV.close_env()
+            now_seed += 1
+            continue
+        except Exception as e:
+            succ_seed -= 1
+            if len(suc_test_seed_list) > 0 and suc_test_seed_list[-1] == now_seed:
+                suc_test_seed_list.pop()
+            print(" -------------")
+            print("Error: ", e)
+            print("Stack Trace: ", traceback.format_exc())
+            print(" -------------")
+            TASK_ENV.close_env()
+            now_seed += 1
+            print("error occurs !")
+            continue
         episode_info_list = [episode_info["info"]]
         results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
         instruction = np.random.choice(results[0][instruction_type])
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
+        current_video_path = None
+        renamed_video_path = None
         if TASK_ENV.eval_video_path is not None:
+            episode_idx = TASK_ENV.test_num
+            current_video_path = Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.mp4"
             ffmpeg = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -418,7 +542,7 @@ def eval_policy(task_name,
                     "-video_size",
                     video_size,
                     "-framerate",
-                    "10",
+                    str(int(args.get("eval_video_fps", 10))),
                     "-i",
                     "-",
                     "-pix_fmt",
@@ -427,7 +551,7 @@ def eval_policy(task_name,
                     "libx264",
                     "-crf",
                     "23",
-                    f"{TASK_ENV.eval_video_path}/episode{TASK_ENV.test_num}.mp4",
+                    str(current_video_path),
                 ],
                 stdin=subprocess.PIPE,
             )
@@ -436,7 +560,13 @@ def eval_policy(task_name,
         succ = False
         reset_func(model)
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
-            observation = TASK_ENV.get_obs()
+            need_obs = True
+            if skip_get_obs_within_replan and hasattr(model, "should_request_observation"):
+                need_obs = bool(model.should_request_observation())
+
+            observation = None
+            if need_obs:
+                observation = TASK_ENV.get_obs()
             eval_func(TASK_ENV, model, observation)
             if TASK_ENV.eval_success:
                 succ = True
@@ -444,6 +574,14 @@ def eval_policy(task_name,
         # task_total_reward += TASK_ENV.episode_score
         if TASK_ENV.eval_video_path is not None:
             TASK_ENV._del_eval_video_ffmpeg()
+            if current_video_path is None or not current_video_path.exists():
+                raise FileNotFoundError(f"Expected eval video file not found: {current_video_path}")
+            result_suffix = _result_suffix_from_task_config(str(args["task_config"]))
+            renamed_video_path = (
+                Path(TASK_ENV.eval_video_path)
+                / f"episode{episode_idx}_{result_suffix}_success-{str(succ).lower()}.mp4"
+            )
+            current_video_path.rename(renamed_video_path)
 
         if succ:
             TASK_ENV.suc += 1
@@ -458,10 +596,15 @@ def eval_policy(task_name,
             TASK_ENV.viewer.close()
 
         TASK_ENV.test_num += 1
-        video_path = None
-        if TASK_ENV.eval_video_path is not None:
-            video_path = Path(TASK_ENV.eval_video_path) / f"episode{TASK_ENV.test_num - 1}.mp4"
-        record_rgbdwam_eval_result(usr_args, args, TASK_ENV, model, now_seed, succ, video_path)
+        record_rgbdwam_eval_result(
+            usr_args,
+            args,
+            TASK_ENV,
+            model,
+            now_seed,
+            succ,
+            renamed_video_path,
+        )
 
         print(
             f"\033[93m{task_name}\033[0m | \033[94m{args['policy_name']}\033[0m | \033[92m{args['task_config']}\033[0m | \033[91m{args['ckpt_setting']}\033[0m\n"
