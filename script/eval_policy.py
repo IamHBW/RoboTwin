@@ -227,9 +227,6 @@ def get_embodiment_config(robot_file):
 
 
 def get_eval_video_size(args):
-    if args["camera"].get("collect_wrist_camera", False):
-        return "320x384"
-
     head_camera_cfg = get_camera_config(args["camera"]["head_camera_type"])
     video_w = int(head_camera_cfg["w"])
     video_h = int(head_camera_cfg["h"])
@@ -528,7 +525,11 @@ def eval_policy(task_name,
         renamed_video_path = None
         if TASK_ENV.eval_video_path is not None:
             episode_idx = TASK_ENV.test_num
-            current_video_path = Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.mp4"
+            result_suffix = _result_suffix_from_task_config(str(args["task_config"]))
+            current_video_path = (
+                Path(TASK_ENV.eval_video_path)
+                / f"episode{episode_idx}_{result_suffix}.tmp.mp4"
+            )
             ffmpeg = subprocess.Popen(
                 [
                     "ffmpeg",
@@ -576,7 +577,6 @@ def eval_policy(task_name,
             TASK_ENV._del_eval_video_ffmpeg()
             if current_video_path is None or not current_video_path.exists():
                 raise FileNotFoundError(f"Expected eval video file not found: {current_video_path}")
-            result_suffix = _result_suffix_from_task_config(str(args["task_config"]))
             renamed_video_path = (
                 Path(TASK_ENV.eval_video_path)
                 / f"episode{episode_idx}_{result_suffix}_success-{str(succ).lower()}.mp4"

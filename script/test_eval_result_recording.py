@@ -25,6 +25,13 @@ from script.eval_policy import record_rgbdwam_eval_result
 
 
 class EvalResultRecordingTest(unittest.TestCase):
+    def test_video_size_matches_written_head_camera_frames(self):
+        args = {"camera": {"head_camera_type": "D435", "collect_wrist_camera": True}}
+        with patch.object(
+            eval_policy_module, "get_camera_config", return_value={"w": 320, "h": 240}
+        ):
+            self.assertEqual(eval_policy_module.get_eval_video_size(args), "320x240")
+
     def test_eval_policy_resumes_episode_and_seed_offsets(self):
         class FakeEnv:
             def __init__(self):
